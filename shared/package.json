@@ -1,0 +1,22 @@
+{
+  "name": "@redliner/shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./physics": "./src/physics/index.ts",
+    "./protocol": "./src/protocol/index.ts",
+    "./ai": "./src/ai/index.ts",
+    "./race": "./src/race/index.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
