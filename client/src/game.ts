@@ -2,6 +2,7 @@ import {
   PhysicsEngine, CAR_CLASSES, CAR_CLASS_ORDER,
   CarClass, CarConfig,
   AIDriver, DIFFICULTIES, DIFFICULTY_ORDER, DifficultyLevel,
+  PLAYER_DIFFICULTIES,
 } from '@redliner/shared';
 import { Renderer, RenderState, DisplayMode, createDefaultRenderState } from './render/renderer.js';
 import { InputManager } from './input/input-manager.js';
@@ -97,8 +98,8 @@ export class Game {
     this.sfx = new SFX(this.audioEngine);
 
     this.config = CAR_CLASSES[this.carClass];
-    this.playerPhysics = new PhysicsEngine(this.config);
-    this.aiPhysics = new PhysicsEngine(this.config);
+    this.playerPhysics = new PhysicsEngine(this.config, PLAYER_DIFFICULTIES[this.difficulty]);
+    this.aiPhysics = new PhysicsEngine(this.config, { rpmBuildScale: 1.0, engineBlowThreshold: 1.20 });
     this.aiDriver = new AIDriver(DIFFICULTIES[this.difficulty], this.config);
     this.renderState = createDefaultRenderState(this.config);
   }
@@ -412,8 +413,9 @@ export class Game {
   // ─── RACE INIT ─────────────────────────────────
   private initRace(): void {
     this.config = CAR_CLASSES[this.carClass];
-    this.playerPhysics = new PhysicsEngine(this.config);
-    this.aiPhysics = new PhysicsEngine(this.config);
+    this.playerPhysics = new PhysicsEngine(this.config, PLAYER_DIFFICULTIES[this.difficulty]);
+    // AI gets a generous blow threshold — AI mistakes come from overRevChance, not physics blow
+    this.aiPhysics = new PhysicsEngine(this.config, { rpmBuildScale: 1.0, engineBlowThreshold: 1.20 });
     this.aiDriver = new AIDriver(DIFFICULTIES[this.difficulty], this.config);
     this.aiDriver.prepareForRace();
     this.renderState = createDefaultRenderState(this.config);
@@ -476,10 +478,14 @@ export class Game {
     // Engine blow
     if (playerState.engineBlown && !this.wasEngineBlown) {
       this.wasEngineBlown = true;
+      console.error(`[GAME] PLAYER ENGINE BLOWN — rpm was ${playerState.rpm}, gear=${playerState.gear}, mph=${playerState.mph.toFixed(1)}`);
       this.effects.triggerEngineBlow();
       this.sfx.playEngineBlow();
       this.engineSound.stop();
       this.finishRace(playerState, aiState);
+    }
+    if (aiState.engineBlown && !this.wasEngineBlown) {
+      console.warn(`[GAME] AI ENGINE BLOWN — rpm was ${aiState.rpm}, gear=${aiState.gear}, mph=${aiState.mph.toFixed(1)}, player still racing`);
     }
 
     // Foul

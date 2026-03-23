@@ -1,4 +1,4 @@
-import { AIDifficulty, DifficultyLevel } from './types.js';
+import { AIDifficulty, DifficultyLevel, PlayerDifficulty } from './types.js';
 
 export const DIFFICULTIES: Record<DifficultyLevel, AIDifficulty> = {
   rookie: {
@@ -44,3 +44,18 @@ export const DIFFICULTIES: Record<DifficultyLevel, AIDifficulty> = {
 };
 
 export const DIFFICULTY_ORDER: DifficultyLevel[] = ['rookie', 'amateur', 'pro', 'legend'];
+
+/**
+ * Player-facing difficulty scaling.
+ *
+ * Rookie:  RPM climbs 55% as fast, engine tolerates 15% over redline → ~5.5s per gear
+ * Amateur: RPM climbs 75% as fast, engine tolerates 10% over redline → ~4.0s per gear
+ * Pro:     RPM climbs at full rate, engine tolerates 5% over (original) → ~3.0s per gear
+ * Legend:  RPM climbs 15% faster, engine tolerates only 2% over → ~2.6s per gear, punishing
+ */
+export const PLAYER_DIFFICULTIES: Record<DifficultyLevel, PlayerDifficulty> = {
+  rookie:  { rpmBuildScale: 0.55, engineBlowThreshold: 1.15 },
+  amateur: { rpmBuildScale: 0.75, engineBlowThreshold: 1.10 },
+  pro:     { rpmBuildScale: 1.00, engineBlowThreshold: 1.05 },
+  legend:  { rpmBuildScale: 1.15, engineBlowThreshold: 1.02 },
+};

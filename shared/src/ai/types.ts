@@ -10,3 +10,9 @@ export interface AIDifficulty {
 }
 
 export type DifficultyLevel = 'rookie' | 'amateur' | 'pro' | 'legend';
+
+/** Player-facing difficulty scaling — affects the player's car physics */
+export interface PlayerDifficulty {
+  rpmBuildScale: number;       // multiplier on rpmBuildRate (lower = more time per gear)
+  engineBlowThreshold: number; // fraction above maxRpm before blow (higher = more forgiving)
+}

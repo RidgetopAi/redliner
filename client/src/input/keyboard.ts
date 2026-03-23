@@ -16,7 +16,9 @@ export class KeyboardHandler {
   }
 
   private onKeyDown(e: KeyboardEvent): void {
-    e.preventDefault();
+    if (this.gasKeys.has(e.code) || this.shiftKeys.has(e.code)) {
+      e.preventDefault();
+    }
     if (this.gasKeys.has(e.code)) {
       this.gasDown = true;
     }

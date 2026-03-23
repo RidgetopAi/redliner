@@ -9,15 +9,20 @@ import {
   GRAVITY,
   MPS_TO_MPH,
 } from './constants.js';
+import { PlayerDifficulty } from '../ai/types.js';
 
 export class PhysicsEngine {
   private config: CarConfig;
   private state: PhysicsState;
   private greenLightTime: number = 0;
   private hasLaunched: boolean = false;
+  private rpmBuildScale: number;
+  private blowThreshold: number;
 
-  constructor(config: CarConfig) {
+  constructor(config: CarConfig, playerDifficulty?: PlayerDifficulty) {
     this.config = config;
+    this.rpmBuildScale = playerDifficulty?.rpmBuildScale ?? 1.0;
+    this.blowThreshold = playerDifficulty?.engineBlowThreshold ?? ENGINE_BLOW_THRESHOLD;
     this.state = this.createInitialState();
   }
 
@@ -96,10 +101,18 @@ export class PhysicsEngine {
       s.reactionTime = absoluteTime - this.greenLightTime;
     }
 
-    // Gear shift
+    // Gear shift — RPM drops by the ratio between old and new gear
     if (input.shiftUp && s.gear < 4) {
+      const oldRatio = c.gearRatios[s.gear - 1];
       s.gear++;
-      s.rpm = Math.max(c.idleRpm, s.rpm - c.shiftDropRpm);
+      const newRatio = c.gearRatios[s.gear - 1];
+      // RPM drops proportionally: new_rpm = old_rpm * (newRatio / oldRatio)
+      // If shiftDropRpm is set (legacy), use it as a fallback
+      if (c.shiftDropRpm > 0) {
+        s.rpm = Math.max(c.idleRpm, s.rpm - c.shiftDropRpm);
+      } else {
+        s.rpm = Math.max(c.idleRpm, s.rpm * (newRatio / oldRatio));
+      }
     }
 
     // Effective gear ratio
@@ -109,28 +122,54 @@ export class PhysicsEngine {
     // In lower gears the engine has more mechanical advantage (less load),
     // so RPM climbs quickly. In higher gears the load is greater, slowing RPM climb.
     // This naturally creates the "shift or blow" tension per gear.
-    if (input.gasDown) {
-      const wheelRpm = (s.velocity / (2 * Math.PI * c.tireRadius)) * 60;
-      const targetRpm = Math.max(wheelRpm * gearRatio, c.idleRpm);
+    // RPM calculation
+    // At speed, RPM is mechanically coupled to wheel speed via the drivetrain.
+    // Free-rev (RPM climbing independent of wheel speed) only happens at very
+    // low speed when there's effective clutch slip (launch scenario).
+    const wheelRpm = (s.velocity / (2 * Math.PI * c.tireRadius)) * 60;
+    const drivetrainRpm = Math.max(wheelRpm * gearRatio, c.idleRpm);
 
-      // Gear load: ratio of 1st gear to current gear, raised to 1.5 for gameplay feel
-      // 1st gear: load=1.0 (fastest RPM climb), 4th gear: load~4.3 (slowest)
+    if (input.gasDown) {
+      // How much the engine is ahead of the wheels (clutch slip / launch zone)
+      const rpmExcess = s.rpm - drivetrainRpm;
+
+      // Free-rev: only applies when engine RPM is above what the wheels demand.
+      // This happens at launch (wheels barely moving, engine revving) and right
+      // after a shift (RPM drops but car speed hasn't changed yet).
+      // As drivetrain RPM catches up to engine RPM, free-rev contribution vanishes.
       const gearLoadRatio = c.gearRatios[0] / c.gearRatios[s.gear - 1];
       const gearLoad = Math.pow(gearLoadRatio, 1.5);
-      const freeRevRate = c.rpmBuildRate * 2000 / gearLoad * PHYSICS_DT;
+      const freeRevRate = c.rpmBuildRate * this.rpmBuildScale * 2000 / gearLoad * PHYSICS_DT;
 
-      // RPM is the higher of wheel-demanded RPM (mechanical coupling)
-      // or current RPM + free-rev rate (engine spinning up under gas)
-      s.rpm = Math.max(targetRpm, s.rpm + freeRevRate);
+      if (rpmExcess <= 0) {
+        // Engine is at or below drivetrain RPM — fully coupled.
+        // RPM tracks drivetrain (which rises as the car accelerates).
+        // Add a small free-rev to let RPM creep slightly above drivetrain,
+        // creating the tension of "RPM is climbing, do I need to shift?"
+        s.rpm = drivetrainRpm + freeRevRate;
+      } else {
+        // Engine is above drivetrain RPM (launch / post-shift).
+        // Free-rev continues but the gap closes as the car accelerates
+        // and drivetrain RPM rises to meet engine RPM.
+        s.rpm = s.rpm + freeRevRate;
+      }
 
-      // Hard cap just above blow threshold (allows blow detection next frame)
-      s.rpm = Math.min(s.rpm, c.maxRpm * ENGINE_BLOW_THRESHOLD + 200);
+      // Hard cap at blow threshold
+      s.rpm = Math.min(s.rpm, c.maxRpm * this.blowThreshold + 200);
     } else {
-      s.rpm = Math.max(c.idleRpm, s.rpm - 2000 * PHYSICS_DT);
+      // Gas off — RPM decays but can't go below drivetrain RPM (engine braking)
+      const decayRate = 2000 + (s.rpm - c.idleRpm) * 0.3;
+      s.rpm = Math.max(drivetrainRpm, s.rpm - decayRate * PHYSICS_DT);
+    }
+
+    // Telemetry: log state every 30 frames in gear 4, and always on blow
+    if (s.gear === 4 && Math.round(s.time * 60) % 30 === 0) {
+      console.log(`[G4] rpm=${s.rpm.toFixed(0)} drivetrain=${drivetrainRpm.toFixed(0)} maxRpm=${c.maxRpm} blowAt=${(c.maxRpm * this.blowThreshold).toFixed(0)} mph=${s.mph.toFixed(1)} gas=${input.gasDown} dist=${s.distance.toFixed(0)}m`);
     }
 
     // Engine blow check
-    if (s.rpm > c.maxRpm * ENGINE_BLOW_THRESHOLD) {
+    if (s.rpm > c.maxRpm * this.blowThreshold) {
+      console.warn(`[ENGINE BLOW] gear=${s.gear} rpm=${s.rpm.toFixed(0)} drivetrainRpm=${drivetrainRpm.toFixed(0)} blowThreshold=${(c.maxRpm * this.blowThreshold).toFixed(0)} maxRpm=${c.maxRpm} mph=${s.mph.toFixed(1)} velocity=${s.velocity.toFixed(2)} gas=${input.gasDown} distance=${s.distance.toFixed(0)}m time=${s.time.toFixed(2)}s`);
       s.engineBlown = true;
       s.rpm = 0;
       return this.getState();
@@ -179,23 +218,30 @@ export class PhysicsEngine {
     const c = this.config;
 
     if (rpm <= c.idleRpm) {
-      return c.peakTorqueNm * 0.4;
+      return c.peakTorqueNm * 0.40;
     }
 
-    if (rpm <= c.peakTorqueRpm) {
-      // Rising: sqrt curve for aggressive early feel
-      const t = (rpm - c.idleRpm) / (c.peakTorqueRpm - c.idleRpm);
-      return c.peakTorqueNm * (0.6 + 0.4 * Math.sqrt(t));
+    // Normalize RPM position between idle and max
+    const normalizedRpm = (rpm - c.idleRpm) / (c.maxRpm - c.idleRpm);
+    const peakNormalized = (c.peakTorqueRpm - c.idleRpm) / (c.maxRpm - c.idleRpm);
+
+    if (normalizedRpm <= peakNormalized) {
+      // Rising side: quadratic rise from 40% at idle to 100% at peak
+      const t = normalizedRpm / peakNormalized;
+      return c.peakTorqueNm * (0.40 + 0.60 * (1 - Math.pow(1 - t, 2)));
     }
 
-    if (rpm <= c.peakHpRpm) {
-      // Gentle decline from peak torque to peak HP
-      const t = (rpm - c.peakTorqueRpm) / (c.peakHpRpm - c.peakTorqueRpm);
+    // Falling side past peak torque
+    const hpNormalized = (c.peakHpRpm - c.idleRpm) / (c.maxRpm - c.idleRpm);
+
+    if (normalizedRpm <= hpNormalized) {
+      // Gentle decline from peak torque to peak HP (~88% of peak)
+      const t = (normalizedRpm - peakNormalized) / (hpNormalized - peakNormalized);
       return c.peakTorqueNm * (1.0 - 0.12 * t);
     }
 
-    // Fall off above peak HP toward redline
-    const t = (rpm - c.peakHpRpm) / (c.maxRpm - c.peakHpRpm);
-    return c.peakTorqueNm * (0.88 - 0.35 * Math.min(t, 1));
+    // Steeper falloff above peak HP toward redline (~62% at redline)
+    const t = (normalizedRpm - hpNormalized) / (1.0 - hpNormalized);
+    return c.peakTorqueNm * (0.88 - 0.26 * Math.pow(Math.min(t, 1), 1.5));
   }
 }
